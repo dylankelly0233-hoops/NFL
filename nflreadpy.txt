@@ -1,0 +1,6 @@
+nflreadpy
+pandas
+numpy
+scikit-learn
+openpyxl
+xlsxwriter
