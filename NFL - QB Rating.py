@@ -1,3 +1,24 @@
+import subprocess
+import sys
+
+# --- FORCE INSTALL (The Nuclear Option) ---
+def install(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+try:
+    import nflreadpy
+except ImportError:
+    install('nflreadpy')
+    install('scikit-learn')
+    install('openpyxl')
+    install('xlsxwriter')
+# ------------------------------------------
+
+import streamlit as st
+import nflreadpy as nfl
+import pandas as pd
+# ... (rest of your code follows)
+
 import streamlit as st
 import nflreadpy as nfl
 import pandas as pd
@@ -285,3 +306,4 @@ try:
 
 except Exception as e:
     st.error(f"Error: {e}")
+
