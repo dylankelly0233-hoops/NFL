@@ -4,8 +4,6 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import Ridge
 import io
-from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="NFL Betting Board", layout="wide")
@@ -120,13 +118,6 @@ try:
     bad_qb_rating = qb_ratings.quantile(0.95) 
     for qb in qb_ratings.index:
         if qb_counts.get(qb, 0) < min_starts:
-            # Note: Logic assumes higher positive = better, so if quantile logic was specific
-            # we ensure we are assigning a "bad" value correctly.
-            # Based on your logic: Home favored -> Positive. 
-            # So Low Rating = Bad.
-            # Let's verify bad_qb_rating calculation:
-            # If standard distribution, quantile(0.05) is low (bad), 0.95 is high (good).
-            # I will trust your existing logic for now, but usually min() is bad.
             pass 
     
     qb_dict = qb_ratings.to_dict()
@@ -273,24 +264,33 @@ try:
         use_container_width=True
     )
     
-    # --- NEW VISUALIZATION SECTION ---
+    # --- NEW VISUALIZATION SECTION (NO MATPLOTLIB) ---
     st.divider()
     st.subheader("3. Power Ratings Breakdown")
     st.caption("The raw Regression Coefficients used to calculate the lines above.")
+    st.info("💡 Note: In this model, **Negative = Good** (Favored) and **Positive = Bad**.")
 
     # Show HFA
     st.metric("Current Home Field Advantage (Points)", f"{hfa_final:.2f}")
     
+    # Helper for coloring without Matplotlib
+    def get_rating_color(val):
+        # Green for Negative (Good), Red for Positive (Bad)
+        color = '#d4edda' if val < 0 else '#f8d7da'
+        text_color = '#155724' if val < 0 else '#721c24'
+        return f'background-color: {color}; color: {text_color}'
+
     col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("**Team Strength (Non-QB)**")
-        # Convert dict to DF and sort
         team_df = pd.DataFrame(list(team_dict.items()), columns=['Team', 'Rating'])
-        team_df = team_df.sort_values('Rating', ascending=False)
+        # Sort so Best (most negative) is at top
+        team_df = team_df.sort_values('Rating', ascending=True)
         
         st.dataframe(
-            team_df.style.background_gradient(cmap="RdYlGn", subset=['Rating']),
+            team_df.style.map(get_rating_color, subset=['Rating'])
+                   .format({"Rating": "{:.2f}"}),
             hide_index=True,
             use_container_width=True,
             height=400
@@ -298,14 +298,13 @@ try:
         
     with col2:
         st.markdown("**QB Values (Points Added)**")
-        # Convert dict to DF and sort
-        # Filter out generic backups or low-count QBs if list is too long, 
-        # but for now we show all loaded QBs
         qb_df = pd.DataFrame(list(qb_dict.items()), columns=['Quarterback', 'Value'])
-        qb_df = qb_df.sort_values('Value', ascending=False).head(50) # Top 50 relevant QBs
+        # Sort so Best (most negative) is at top
+        qb_df = qb_df.sort_values('Value', ascending=True).head(50)
         
         st.dataframe(
-            qb_df.style.background_gradient(cmap="RdYlGn", subset=['Value']),
+            qb_df.style.map(get_rating_color, subset=['Value'])
+                 .format({"Value": "{:.2f}"}),
             hide_index=True,
             use_container_width=True,
             height=400
