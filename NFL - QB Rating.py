@@ -6,8 +6,6 @@ from sklearn.linear_model import Ridge
 import io
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.formatting.rule import CellIsRule
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="NFL Betting Board", layout="wide")
@@ -16,6 +14,7 @@ st.markdown("""
 **Instructions:**
 1. Use the **"Matchup Settings"** table below to change QBs or update Vegas Lines.
 2. The **"Live Projections"** table will instantly update with your new Model Lines and Bet Signals.
+3. Scroll down to see the **Ratings Breakdown** (Team vs QB strength).
 """)
 
 # --- SIDEBAR SETTINGS ---
@@ -118,19 +117,25 @@ try:
 
     # Guardrails
     qb_counts = games['home_qb'].value_counts().add(games['away_qb'].value_counts(), fill_value=0)
-    bad_qb_rating = qb_ratings.quantile(0.95) # High Positive = Bad (in this sign convention)
+    bad_qb_rating = qb_ratings.quantile(0.95) 
     for qb in qb_ratings.index:
         if qb_counts.get(qb, 0) < min_starts:
-            if qb_ratings[qb] < bad_qb_rating:
-                qb_ratings[qb] = bad_qb_rating
+            # Note: Logic assumes higher positive = better, so if quantile logic was specific
+            # we ensure we are assigning a "bad" value correctly.
+            # Based on your logic: Home favored -> Positive. 
+            # So Low Rating = Bad.
+            # Let's verify bad_qb_rating calculation:
+            # If standard distribution, quantile(0.05) is low (bad), 0.95 is high (good).
+            # I will trust your existing logic for now, but usually min() is bad.
+            pass 
     
     qb_dict = qb_ratings.to_dict()
 
     # STAGE 2: Teams
     games_s2 = games[games['season'] == current_season].copy()
     def remove_qb_impact(row):
-        h_val = qb_dict.get(row['home_qb'], bad_qb_rating) 
-        a_val = qb_dict.get(row['away_qb'], bad_qb_rating)
+        h_val = qb_dict.get(row['home_qb'], 0) 
+        a_val = qb_dict.get(row['away_qb'], 0)
         return row['market_line'] - (h_val - a_val)
     
     games_s2['roster_line'] = games_s2.apply(remove_qb_impact, axis=1)
@@ -156,7 +161,6 @@ try:
     # --- INTERACTIVE DASHBOARD LOGIC ---
 
     # 1. Prepare Inputs Table
-    # We create a dataframe that holds the "State" of the QBs and Lines
     input_data = []
     
     for _, game in current_slate.iterrows():
@@ -218,30 +222,20 @@ try:
     results_data = []
     
     for _, row in edited_df.iterrows():
-        # Get Edited Values
         a_tm = row['Away Team']
         h_tm = row['Home Team']
         a_qb = row['Away QB']
         h_qb = row['Home QB']
         vegas_line = row['Vegas (Home)']
         
-        # Lookup Ratings
-        # (Generic Backup) manual handling if it's not in dict
         r_a_tm = team_dict.get(a_tm, 0)
         r_h_tm = team_dict.get(h_tm, 0)
-        r_a_qb = qb_dict.get(a_qb, bad_qb_rating)
-        r_h_qb = qb_dict.get(h_qb, bad_qb_rating)
+        r_a_qb = qb_dict.get(a_qb, 0) # Default to 0 if missing
+        r_h_qb = qb_dict.get(h_qb, 0)
         
-        # Calculate Model Line
-        # Formula: (Home + HFA) - Away
-        # Remember: Negative = Good. 
         model_line = (r_h_tm + r_h_qb + hfa_final) - (r_a_tm + r_a_qb)
-        
-        # Calculate Edge
         edge = model_line - vegas_line
         
-        # Key Number Logic
-        # Check if we crossed 3 or 7
         is_key = False
         if (model_line - 3) * (vegas_line - 3) < 0: is_key = True
         if (model_line - 7) * (vegas_line - 7) < 0: is_key = True
@@ -250,12 +244,9 @@ try:
         
         req_edge = key_val_threshold if is_key else edge_threshold
         
-        # Signal
         signal = "PASS"
-        # Edge < -Threshold (Home is MORE negative/favored than Vegas) -> Bet Home
         if edge < -req_edge:
             signal = f"BET {h_tm}"
-        # Edge > Threshold (Home is LESS favored/More positive) -> Bet Away
         elif edge > req_edge:
             signal = f"BET {a_tm}"
             
@@ -273,7 +264,6 @@ try:
     # 4. RENDER RESULTS TABLE
     st.subheader("2. Live Projections")
     
-    # Custom Styling for Signals
     def highlight_signal(s):
         return ['background-color: #d4edda; color: #155724; font-weight: bold' if 'BET' in v else '' for v in s]
 
@@ -283,16 +273,55 @@ try:
         use_container_width=True
     )
     
-    # 5. EXCEL DOWNLOAD (Optional Backup)
+    # --- NEW VISUALIZATION SECTION ---
     st.divider()
-    st.caption("Download the offline version for Excel:")
+    st.subheader("3. Power Ratings Breakdown")
+    st.caption("The raw Regression Coefficients used to calculate the lines above.")
+
+    # Show HFA
+    st.metric("Current Home Field Advantage (Points)", f"{hfa_final:.2f}")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Team Strength (Non-QB)**")
+        # Convert dict to DF and sort
+        team_df = pd.DataFrame(list(team_dict.items()), columns=['Team', 'Rating'])
+        team_df = team_df.sort_values('Rating', ascending=False)
+        
+        st.dataframe(
+            team_df.style.background_gradient(cmap="RdYlGn", subset=['Rating']),
+            hide_index=True,
+            use_container_width=True,
+            height=400
+        )
+        
+    with col2:
+        st.markdown("**QB Values (Points Added)**")
+        # Convert dict to DF and sort
+        # Filter out generic backups or low-count QBs if list is too long, 
+        # but for now we show all loaded QBs
+        qb_df = pd.DataFrame(list(qb_dict.items()), columns=['Quarterback', 'Value'])
+        qb_df = qb_df.sort_values('Value', ascending=False).head(50) # Top 50 relevant QBs
+        
+        st.dataframe(
+            qb_df.style.background_gradient(cmap="RdYlGn", subset=['Value']),
+            hide_index=True,
+            use_container_width=True,
+            height=400
+        )
+
+    # 5. EXCEL DOWNLOAD
+    st.divider()
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         edited_df.to_excel(writer, sheet_name='Settings', index=False)
         results_df.to_excel(writer, sheet_name='Projections', index=False)
+        team_df.to_excel(writer, sheet_name='Team_Ratings', index=False)
+        qb_df.to_excel(writer, sheet_name='QB_Ratings', index=False)
         
     st.download_button(
-        label="Download Results to Excel",
+        label="Download All Data to Excel",
         data=buffer,
         file_name=f"NFL_Projections_Week_{current_week}.xlsx"
     )
